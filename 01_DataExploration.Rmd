@@ -1,0 +1,91 @@
+---
+title: "01_MODISPorts"
+author: "Simon Topp"
+date: "5/18/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(sf)
+library(mapview)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+Ports <- read_csv('data/LargePorts1.csv') %>%
+  bind_rows(read_csv('data/LargePorts2.csv')) %>%
+  filter(pixelCount > 10,
+         cScore < .05,
+         !is.na(sur_refl_b01)) %>%
+  mutate(date = as_datetime(date/1000),
+         week = week(date),
+         year = year(date),
+         month = month(date),
+         day = yday(date),
+         status = ifelse(month %in%  c(1,2),'PreShutdown', 'PostShutdown'),
+         COVID = ifelse(year == 2020, 'COVID', 'notCOVID')) %>%
+  rename(red = sur_refl_b01, nir = sur_refl_b02, blue = sur_refl_b03, green = sur_refl_b04) %>%
+  mutate(ndssi = (blue-nir)/(blue+nir))
+
+Ports %>%
+  group_by(COVID, Port, week) %>%
+  summarise(red = mean(red), ndssi = mean(ndssi)) %>%
+  ggplot(., aes(x = week, y = ndssi, color = COVID)) + 
+  #geom_point(alpha = .5) + 
+  geom_line() +
+  facet_wrap(~Port, scales = 'free') 
+
+weeklyMeans <- Ports %>%
+  filter(ndssi > -1 & ndssi < 1) %>%
+  group_by(Port) %>%
+  mutate(ndssi = scale(ndssi)) %>%
+  ungroup() %>%
+  left_join(largePorts, by = c('Port' = 'PORT_NAME')) %>%
+  group_by(week,COVID, HARBORTYPE) %>%
+  summarise(mean_ndssi = mean(ndssi, na.rm = T),
+            sd = sd(ndssi, na.rm = T))
+
+weeklyMeans %>%
+  ggplot(., aes(x = week, y = mean_ndssi, color = COVID)) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_ndssi - sd, ymax = mean_ndssi + sd)) + facet_wrap(~HARBORTYPE)
+
+Ports %>%
+  filter(ndssi > -1 & ndssi < 1) %>%
+  group_by(Port) %>%
+  mutate(ndssi = scale(ndssi)) %>%
+  ungroup() %>%
+  left_join(largePorts, by = c('pIndex' = 'INDEX_NO')) %>%
+  ggplot(.,aes(x = factor(week), y = ndssi, color = COVID)) + geom_boxplot() + coord_cartesian(ylim = c(-1,1)) + facet_wrap(~HARBORTYPE)
+
+Ports %>% group_by(COVID, day, status, Port) %>%
+  summarise(red = median(red),
+            ndssi = median(ndssi)) %>%
+  ggplot(.,aes(x = COVID, y = ndssi, color = status)) + geom_boxplot() + facet_wrap(~Port, scales = 'free')
+
+```
+
+## take a look at world port shapefile from NGIA https://msi.nga.mil/Publications/WPI
+
+
+```{r pressure, echo=FALSE}
+ports <- st_read('data/in/WPI_Shapefile/WPI.shp')
+
+largePorts <- ports %>% filter(MAX_VESSEL == 'L', HARBORSIZE %in% c('L'))
+
+mapView(largePorts)
+
+
+```
+
