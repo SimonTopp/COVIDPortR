@@ -16,17 +16,74 @@ library(sf)
 library(mapview)
 ```
 
-## R Markdown
+## Find some ports
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+## take a look at world port shapefile from NGIA https://msi.nga.mil/Publications/WPI and compare it to 2015 major ports by tonnage
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r pressure, echo=FALSE}
+## This is a cluster
+
+ports <- st_read('data/in/WPI_Shapefile/WPI.shp') %>%
+  mutate(Port = tolower(PORT_NAME))
+
+## From American Journal of Transportation https://ajot.com/premium/ajot-ajots-top-100-containerports-a-to-z/P1
+rankings <- read_csv('data/in/2018_RankingsTEU.csv') %>%
+  mutate(Port = tolower(Port))
+
+check <- ports %>% filter(Port %in% rankings$Port)
+
+missing <- rankings %>% filter(!Port %in% check$Port)
+
+mis <- missing$Port[38]
+print(mis)
+glimpse(ports[grep('shang', ports$Port),])
+
+## Names of those that were missing.
+missingNames <- tolower(c('ANTWERPEN', 'BREMEN', 'puerto del callao', "chennai (madras)", "dubayy", "genova", "thanh ho chi minh", 'incheon', "jawaharlal nehru port (nhava shiva)", "kao-hsiung", "port of le havre","nagoya ko", "ningbo", "seattle", "tacoma", "bur said (port said)","qingdao gang", "shekou", "CHIWAN", "keppel - (east singapore)", "tai-chung kang", "tanger", "tangshan (jingtang)", "tianjin xin gang", "tokyo ko", "norfolk", "gwangyang hang", "yokohama ko"))
+
+check <- ports %>% filter(Port %in% c(rankings$Port, missingNames))
+
+st_write(check, 'data/in/LargePorts_TEU/LargePorts_TEU.shp')
+
+largePorts <- ports %>% filter(MAX_VESSEL == 'L', HARBORSIZE %in% c('L'))
+
+mapView(largePorts)
+
+largePorts %>% mutate(Port = tolower(PORT_NAME)) %>% filter(Port %in% check$Port)
+
+
+ne_ports <- st_read('data/in/ne_50m_ports/ne_50m_ports.shp')
+
+```
 
 ```{r cars}
-Ports <- read_csv('data/LargePorts1.csv') %>%
-  bind_rows(read_csv('data/LargePorts2.csv')) %>%
+##Dates, Wuhan lockdown Jan 23, 
+## WHO Pandemic Declaration March 11th
+## March 19th, WSJ Says China Shipping back up
+
+if(group == 'TEU'){
+  largePorts <- st_read('data/in/LargePorts_TEU/LargePorts_TEU.shp') 
+  files <- list.files('data/MODISPorts_TEU', full.names =T)
+}else if(group == 'Size'){
+  largePorts <- st_read('data/in/LargePorts_Size/LargePorts.shp')
+  files <- list.files('data/MODISPorts_Size', full.names = T)
+}
+
+files <- c(list.files('data/MODISPorts_Size', full.names = T), list.files('data/MODISPorts_TEU', full.names =T))
+
+largePorts <- st_read('data/in/LargePorts_TEU/LargePorts_TEU.shp') %>%
+  select(-Port) %>%
+  rbind(st_read('data/in/LargePorts_Size/LargePorts.shp')) %>%
+  distinct(PORT_NAME, .keep_all = T)
+
+
+Ports <- files %>% purrr::map_dfr(read_csv) %>%
+  select(-`system:index`) %>%
+  distinct(Port, date, .keep_all = T) %>%
+  filter_at(vars(sur_refl_b01:sur_refl_b04), all_vars(.>0 & .<3000)) %>%
   filter(pixelCount > 10,
-         cScore < .05,
+         cScore < .3,
          !is.na(sur_refl_b01)) %>%
   mutate(date = as_datetime(date/1000),
          week = week(date),
@@ -34,58 +91,258 @@ Ports <- read_csv('data/LargePorts1.csv') %>%
          month = month(date),
          day = yday(date),
          status = ifelse(month %in%  c(1,2),'PreShutdown', 'PostShutdown'),
-         COVID = ifelse(year == 2020, 'COVID', 'notCOVID')) %>%
+         COVID = ifelse(year == 2020, 'COVID', '2010-2019')) %>%
   rename(red = sur_refl_b01, nir = sur_refl_b02, blue = sur_refl_b03, green = sur_refl_b04) %>%
-  mutate(ndssi = (blue-nir)/(blue+nir))
+  mutate(ndssi = (blue-nir)/(blue+nir),
+         bg = blue/green,
+         chl_a = 10^(0.2818 +  -2.783*log10(bg) + 1.863*log10(bg)^2 + -2.387*log10(bg)^3),
+         TSS_E10 = 27.05*exp(7.83*pi*red/1000),
+         TSS_E28 = 61.369*exp(0.2623*(pi*nir/1000 - pi*sur_refl_b05/1000))) %>%
+  inner_join(largePorts, by = c('Port' = 'PORT_NAME', 'pIndex' = 'INDEX_NO')) %>%
+  filter(day < 138) %>%
+  group_by(Port) %>%
+  mutate_at(.vars = vars(ndssi, TSS_E10, TSS_E28, chl_a), scale) %>%
+  ungroup()
+
+dates = tibble(day = c(23, 70, 78), Event = c('Wuhan Lockdown', 'WHO declares pandemic', 'WSJ says China Shipping agin')) %>%
+  mutate(Event = factor(Event, levels = c('Wuhan Lockdown', 'WHO declares pandemic', 'WSJ says China Shipping agin')))
+
 
 Ports %>%
-  group_by(COVID, Port, week) %>%
-  summarise(red = mean(red), ndssi = mean(ndssi)) %>%
-  ggplot(., aes(x = week, y = ndssi, color = COVID)) + 
-  #geom_point(alpha = .5) + 
-  geom_line() +
-  facet_wrap(~Port, scales = 'free') 
+  filter(HARBORTYPE %in% c('CB', 'CN', 'RN', 'OR')) %>%
+  mutate(HARBORTYPE = factor(HARBORTYPE, levels = c('CB', 'CN', 'RN', 'OR'), labels = c('Coastal Breaker', 'Coastal Natural', 'River Natural', 'Open Roadstead'))) %>%
+  ggplot(., aes(x = day, y = ndssi, color = COVID, group = year)) + 
+  geom_point(alpha = .1, data = . %>% filter(COVID == '2010-2019')) +
+  geom_point(alpha = .1, data = . %>% filter(COVID == 'COVID')) +
+  geom_smooth(se = F, span = .1) +
+  scale_color_manual(values = c('grey60', 'red')) +
+  new_scale('color') +
+  geom_vline(data = dates, aes(xintercept = day, color = Event)) +
+  scale_color_viridis_d() +
+  coord_cartesian(ylim = c(-1,1)) +
+  labs(x = 'Day of Year', y = '<-- More Sediment     Less Sediment -->', title = 'Suspended sediment in major world ports') +
+  theme(legend.position = 'right') +
+  facet_wrap(~HARBORTYPE)
+
+
+Ports %>%
+  ggplot(., aes(x = day, y = chl_a, color = COVID, group = year)) + 
+  geom_point(alpha = .1, data = . %>% filter(COVID == '2010-2019')) +
+  geom_point(alpha = .1, data = . %>% filter(COVID == 'COVID')) +
+  geom_smooth(se = F, span = .1) +
+  scale_color_manual(values = c('grey60', 'red')) +
+  new_scale('color') +
+  geom_vline(data = dates, aes(xintercept = day, color = Event)) +
+  scale_color_viridis_d() +
+  coord_cartesian(ylim = c(-1,1)) +
+  labs(x = 'Day of Year', y = 'Normalized TSS', title = 'Suspended sediment in major world ports') +
+  theme(legend.position = 'right')
+
+
+## Good facet variables, ENTRY_TIDE, ENTRYSWELL
+
+##By Port
+counts <- Ports %>%
+   filter(COVID == COVID) %>%
+   group_by(Port) %>%
+   summarise(count = n()) %>%
+   filter(count > 50)
+
+Ports %>%
+  filter(Port %in% counts$Port[1:40]) %>%
+  ggplot(., aes(x = day, y = ndssi, color = COVID, group = year)) + 
+  geom_point(alpha = .1, data = . %>% filter(COVID == '2010-2019')) +
+  geom_point(alpha = .1, data = . %>% filter(COVID == 'COVID')) +
+  geom_smooth(se = F) +
+  scale_color_manual(values = c('grey60', 'red')) +
+  new_scale('color') +
+  geom_vline(data = dates, aes(xintercept = day, color = Event)) +
+  scale_color_viridis_d() +
+  coord_cartesian(ylim = c(-1,1)) +
+  labs(x = 'Day of Year', y = '<-- More Sediment     Less Sediment -->', title = 'Suspended sediment in major world ports') +
+  theme(legend.position = 'right') +
+  facet_wrap(~Port)
+
+## By Year
+Ports %>% filter(day > 23 & day < 78) %>%
+  ggplot(., aes(x = factor(year), y = ndssi, color = COVID)) + geom_violin() + 
+    coord_cartesian(ylim = c(-1.5,1.5))
+
 
 weeklyMeans <- Ports %>%
-  filter(ndssi > -1 & ndssi < 1) %>%
-  group_by(Port) %>%
-  mutate(ndssi = scale(ndssi)) %>%
-  ungroup() %>%
-  left_join(largePorts, by = c('Port' = 'PORT_NAME')) %>%
-  group_by(week,COVID, HARBORTYPE) %>%
+  group_by(week,COVID) %>%
   summarise(mean_ndssi = mean(ndssi, na.rm = T),
             sd = sd(ndssi, na.rm = T))
 
 weeklyMeans %>%
   ggplot(., aes(x = week, y = mean_ndssi, color = COVID)) + 
   geom_point() +
-  geom_errorbar(aes(ymin = mean_ndssi - sd, ymax = mean_ndssi + sd)) + facet_wrap(~HARBORTYPE)
+  geom_errorbar(aes(ymin = mean_ndssi - sd, ymax = mean_ndssi + sd))
+
+## Country
+
+counts <- largePorts %>% group_by(COUNTRY) %>% summarise(count = n()) %>% arrange(desc(count)) %>% filter(count > 6)
 
 Ports %>%
-  filter(ndssi > -1 & ndssi < 1) %>%
+  filter(COUNTRY %in%  counts$COUNTRY) %>%
+  ggplot(., aes(x = day, y = ndssi, color = COVID, group = year)) + 
+  geom_point(alpha = .1, data = . %>% filter(COVID == '2010-2019')) +
+  geom_point(alpha = .1, data = . %>% filter(COVID == 'COVID')) +
+  geom_smooth(se = F) +
+  scale_color_manual(values = c('grey60', 'red')) +
+  new_scale('color') +
+  geom_vline(data = dates, aes(xintercept = day, color = Event)) +
+  scale_color_viridis_d() +
+  coord_cartesian(ylim = c(-1.5,1.5)) +
+  labs(x = 'Day of Year', y = '<-- More Sediment     Less Sediment -->', title = 'Suspended sediment in major world ports') +
+  theme(legend.position = 'right') + 
+  facet_wrap(~COUNTRY)
+```
+
+
+
+```{r}
+portsWeekly <- 
+  largePorts %>%
+  select(Port = PORT_NAME, HARBORTYPE, CHAN_DEPTH, CARGODEPTH, OIL_DEPTH, LATITUDE,LONGITUDE) %>% 
+  merge(Ports %>%
+            group_by(Port) %>%
+            mutate(ndssi = scale(ndssi)) %>%
+            ungroup() %>%
+            group_by(Port, week, COVID) %>%
+            summarise(ndssi = mean(ndssi, na.rm = T)) %>%
+                      #sd_ndssi = sd(ndssi, na.rm = T),
+                      #red = mean(red, na.rm = T),
+                      #sd_red = sd(red, na.rm = T)) %>%
+            spread(COVID, ndssi) %>%
+            ungroup() %>%
+            mutate(dif = COVID - notCOVID) %>%
+              filter(!is.na(dif))) %>%
+            st_transform(crs = 54030) 
+ 
+
+ggplot(portsWeekly, aes(x = week, y = dif, group = Port)) + geom_point() + geom_line() 
+
+
+world <- rnaturalearth::ne_coastline(scale = "medium", returnclass = "sf") %>% 
+  st_transform(crs = 54030) %>% 
+  st_simplify(dTolerance = 200) %>% 
+  st_cast('POLYGON')
+
+p<- ggplot() + 
+  geom_sf(data = world, fill = 'grey80', color = 'grey80') + 
+  geom_sf(data = portsWeekly, aes(color = dif, geometry = geometry), size = 2) +
+  scale_color_gradient2(low = '#d8b365', mid = '#f5f5f5', high = '#5ab4ac', midpoint = 0, na.value='transparent',  trans = 'pseudo_log') +
+  coord_sf(ylim = c(-6000000,7000000)) + ggthemes::theme_map() +
+  theme(legend.position = 'top')+
+  ggtitle("{frame}") +
+  transition_manual(week) +
+  ease_aes("linear") +
+  enter_fade() +
+  exit_fade()
+  
+animate(p, fps = 3)
+
+?unique(portsWeekly$week)
+```
+
+```{r}
+counts <- portsWeekly %>%
+  group_by(Port) %>% 
+  summarise(count = n()) %>%
+  filter(count > 10)
+
+latlongRows <- largePorts %>%
+  st_set_geometry(NULL) %>%
+  select(Port = PORT_NAME, LATITUDE,LONGITUDE) %>%
+  filter(Port %in% counts$Port) %>%
+  arrange(desc(LATITUDE)) %>%
+  mutate(latRow = row_number()) %>%
+  arrange(LONGITUDE) %>%
+  mutate(longRow = row_number()) 
+
+check <- portsWeekly %>% right_join(latlongRows)
+
+ggplot(check,aes(x = longRow, y = latRow, fill = dif)) + geom_raster() + facet_wrap(~week)
+
+ggplot(check, aes(x = week, y = latRow, fill = dif)) + geom_tile() +
+  scale_fill_gradient2(low = '#d8b365', mid = 'grey90', high = '#5ab4ac', midpoint = 0,
+                        na.value='transparent',  trans = 'pseudo_log')
+
+```
+
+
+## Check port by port
+
+```{r}
+## Filter out ports without many COVID samples
+counts <- Ports %>%
+  filter(COVID == "COVID") %>%
   group_by(Port) %>%
-  mutate(ndssi = scale(ndssi)) %>%
-  ungroup() %>%
-  left_join(largePorts, by = c('pIndex' = 'INDEX_NO')) %>%
-  ggplot(.,aes(x = factor(week), y = ndssi, color = COVID)) + geom_boxplot() + coord_cartesian(ylim = c(-1,1)) + facet_wrap(~HARBORTYPE)
+  summarise(count = n()) %>% filter(count > 30)
 
-Ports %>% group_by(COVID, day, status, Port) %>%
-  summarise(red = median(red),
-            ndssi = median(ndssi)) %>%
-  ggplot(.,aes(x = COVID, y = ndssi, color = status)) + geom_boxplot() + facet_wrap(~Port, scales = 'free')
+wilcox <- Ports %>%
+  filter(Port %in% counts$Port,
+         day < 137) %>%
+  group_by(Port) %>%
+  nest() %>%
+  mutate(wilcox = purrr::map(data, ~wilcox.test(.$ndssi[.$COVID == '2010-2019'], .$ndssi[.$COVID == 'COVID'], conf.int = T)),
+         p.value = purrr::map_dbl(wilcox, 'p.value'),
+         conf = purrr::map(wilcox, 'conf.int'),
+         conf.low = purrr::map_dbl(conf, 1),
+         conf.high = purrr::map_dbl(conf, 2)) %>%
+  select(-c(data, wilcox, conf)) %>%
+  mutate(diff = mean(conf.low, conf.high),
+         diff.binary = ifelse(diff < 0, 'Low TSS COVID', 'High TSS COVID'),
+         #diff.binary = ifelse(p.value > 0.05, 'No Difference', diff.binary),
+         sig = ifelse(p.value < 0.1, T,F))
+  
+
+world <- rnaturalearth::ne_coastline(returnclass = 'sf')
+
+wilcox.sf <- wilcox %>% left_join(largePorts %>% select(-geometry), by = c('Port' = 'PORT_NAME')) %>% st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+
+ggplot(world) + geom_sf() +
+  geom_sf(data = wilcox.sf, aes(color = diff.binary, alpha = sig))
+
+
+ggplot(world) + geom_sf() +
+  geom_sf(data = wilcox.sf %>% filter(sig == T), aes(color = diff.binary))
+
 
 ```
 
-## take a look at world port shapefile from NGIA https://msi.nga.mil/Publications/WPI
 
 
-```{r pressure, echo=FALSE}
-ports <- st_read('data/in/WPI_Shapefile/WPI.shp')
+## Check reflectance diffs between 5km and 10km pulls
 
-largePorts <- ports %>% filter(MAX_VESSEL == 'L', HARBORSIZE %in% c('L'))
+```{r}
 
-mapView(largePorts)
+files <- c(list.files('data/MODISPorts_Size', full.names = T), list.files('data/MODISPorts_TEU', full.names =T))
 
+portsSize <- st_read('data/in/LargePorts_Size/LargePorts.shp')
+  
+portsTEU <- st_read('data/in/LargePorts_TEU/LargePorts_TEU.shp')
 
+both <- portsTEU %>% filter(PORT_NAME %in% portsSize$PORT_NAME)
+
+sizeComps <- list.files('data/MODISPorts_Size', full.names = T) %>%
+  purrr::map_dfr(read_csv) %>%
+  mutate(size = 5) %>%
+  bind_rows(list.files('data/MODISPorts_TEU', full.names = T) %>%
+  purrr::map_dfr(read_csv) %>% mutate(size = 10)) %>%
+  filter(Port %in% both$PORT_NAME) %>%
+  filter(pixelCount > 10,
+         #cScore < .3,
+         !is.na(sur_refl_b01)) %>%
+  mutate(date = as_datetime(date/1000),
+         year = year(date),
+         ndssi = (sur_refl_b03-sur_refl_b02)/(sur_refl_b03+sur_refl_b02)) %>%
+  filter(ndssi < 1 & ndssi > -1) %>%
+  mutate(COVID = ifelse(year == 2020, 'COVID', '2010-2019')) %>%
+  gather(c(sur_refl_b01:sur_refl_b05, ndssi), key = 'band', value = 'Rs')
+
+ggplot(sizeComps, aes(x = Rs, color = factor(size))) + geom_freqpoly() + facet_wrap(~band, scales = 'free')
 ```
+
 
