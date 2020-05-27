@@ -317,7 +317,6 @@ ggplot(world) + geom_sf() +
 ## Check reflectance diffs between 5km and 10km pulls
 
 ```{r}
-
 files <- c(list.files('data/MODISPorts_Size', full.names = T), list.files('data/MODISPorts_TEU', full.names =T))
 
 portsSize <- st_read('data/in/LargePorts_Size/LargePorts.shp')
@@ -340,9 +339,11 @@ sizeComps <- list.files('data/MODISPorts_Size', full.names = T) %>%
          ndssi = (sur_refl_b03-sur_refl_b02)/(sur_refl_b03+sur_refl_b02)) %>%
   filter(ndssi < 1 & ndssi > -1) %>%
   mutate(COVID = ifelse(year == 2020, 'COVID', '2010-2019')) %>%
-  gather(c(sur_refl_b01:sur_refl_b05, ndssi), key = 'band', value = 'Rs')
+  gather(c(sur_refl_b01:sur_refl_b05, ndssi), key = 'band', value = 'Rs') %>%
+  left_join(both, by = c('Port' = 'PORT_NAME'))
 
-ggplot(sizeComps, aes(x = Rs, color = factor(size))) + geom_freqpoly() + facet_wrap(~band, scales = 'free')
+plot <- sizeComps %>% filter(band %in% c('sur_refl_b01', 'sur_refl_b02'))
+ggplot(plot, aes(x = Rs, color = factor(size), linetype = band)) + geom_freqpoly() + facet_wrap(~HARBORTYPE, scales = 'free')
 ```
 
 

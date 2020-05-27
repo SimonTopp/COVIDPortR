@@ -1,0 +1,289 @@
+---
+title: "01_MODISPorts"
+author: "Simon Topp"
+date: "5/18/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(sf)
+library(mapview)
+library(ggnewscale)
+```
+
+## Find some ports
+
+## take a look at world port shapefile from NGIA https://msi.nga.mil/Publications/WPI and compare it to 2015 major ports by tonnage
+
+
+```{r pressure, echo=FALSE}
+## This is a cluster
+
+largePorts <- st_read('data/in/LargePorts_TEU/LargePorts_TEU.shp')
+files <- list.files('data/MODISChlorPull', full.names = T)
+
+##Dates, Wuhan lockdown Jan 23, 
+## WHO Pandemic Declaration March 11th
+## March 19th, WSJ Says China Shipping back up
+
+Ports <- files %>% purrr::map_dfr(read_csv) %>%
+  select(-`system:index`) %>%
+  mutate(date = as_datetime(date/1000),
+         week = week(date),
+         year = year(date),
+         month = month(date),
+         day = yday(date),
+         COVID = ifelse(year == 2020, 'COVID', '2010-2019')) %>%
+  inner_join(largePorts, by = c('Port' = 'PORT_NAME', 'pIndex' = 'INDEX_NO')) %>%
+  filter(day < 91)
+
+dates = tibble(day = c(23, 70, 78), Event = c('Wuhan Lockdown', 'WHO declares pandemic', 'WSJ says China Shipping agin')) %>%
+  mutate(Event = factor(Event, levels = c('Wuhan Lockdown', 'WHO declares pandemic', 'WSJ says China Shipping agin')))
+
+
+Ports %>%
+  ggplot(., aes(x = day, y = chlor_a, color = COVID, group = year)) + 
+  geom_point(alpha = .1, data = . %>% filter(COVID == '2010-2019')) +
+  geom_point(alpha = .1, data = . %>% filter(COVID == 'COVID')) +
+  geom_smooth(se = F, span = .1) +
+  scale_color_manual(values = c('grey60', 'red')) +
+  new_scale('color') +
+  geom_vline(data = dates, aes(xintercept = day, color = Event)) +
+  scale_color_viridis_d() +
+  #coord_cartesian(ylim = c(-1,1)) +
+  labs(x = 'Day of Year', y = '<-- More Sediment     Less Sediment -->', title = 'Suspended sediment in major world ports') +
+  theme(legend.position = 'right')
+
+##By Port
+counts <- Ports %>%
+   filter(COVID == 'COVID') %>%
+   group_by(Port) %>%
+   summarise(count = n()) %>%
+   filter(count > 10)
+
+Ports <- Ports %>% filter(Port %in% counts$Port)
+
+Ports %>% 
+  ggplot(., aes(x = day, y = chlor_a, color = COVID, group = year)) + 
+  geom_point(alpha = .1, data = . %>% filter(COVID == '2010-2019')) +
+  geom_point(alpha = .1, data = . %>% filter(COVID == 'COVID')) +
+  geom_line() +
+  scale_color_manual(values = c('grey60', 'red')) +
+  new_scale('color') +
+  geom_vline(data = dates, aes(xintercept = day, color = Event)) +
+  scale_color_viridis_d() +
+  #coord_cartesian(ylim = c(-1,1)) +
+  labs(x = 'Day of Year', y = '<-- More Sediment     Less Sediment -->', title = 'Suspended sediment in major world ports') +
+  theme(legend.position = 'right') +
+  facet_wrap(~Port, scales = 'free')
+
+## By Year
+Ports %>% filter(day > 23 & day < 78) %>%
+  ggplot(., aes(x = factor(year), y = chlor_a, color = COVID)) + geom_violin(draw_quantiles = .5) +
+  coord_cartesian(ylim = c(0,25)) +
+  facet_wrap(~COUNTRY)
+
+Ports %>% filter(day > 23 & day < 78,
+                 COUNTRY %in% c('US','CN')) %>%
+  ggplot(., aes(x = factor(year), y = chlor_a, color = COVID)) + geom_violin(draw_quantiles = .5) +
+  coord_cartesian(ylim = c(0,25)) +
+  facet_wrap(~Port)
+
+
+
+weeklyMeans <- Ports %>%
+  group_by(week,COVID) %>%
+  summarise(mean_chlor = mean(chlor_a, na.rm = T),
+            sd = sd(chlor_a, na.rm = T))
+
+weeklyMeans %>%
+  ggplot(., aes(x = week, y = mean_chlor, color = COVID)) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_chlor - sd, ymax = mean_chlor + sd))
+
+## Country
+Ports %>%
+  ggplot(., aes(x = day, y = chlor_a, color = COVID, group = year)) + 
+  #geom_point(alpha = .1, data = . %>% filter(COVID == '2010-2019')) +
+  #geom_point(alpha = .1, data = . %>% filter(COVID == 'COVID')) +
+  geom_line() +
+  scale_color_manual(values = c('grey60', 'red')) +
+  new_scale('color') +
+  geom_vline(data = dates, aes(xintercept = day, color = Event)) +
+  scale_color_viridis_d() +
+  labs(x = 'Day of Year', y = '<-- More Sediment     Less Sediment -->', title = 'Suspended sediment in major world ports') +
+  theme(legend.position = 'right') + 
+  coord_cartesian(ylim = c(0,25)) +
+  facet_wrap(~COUNTRY, scales = 'free')
+```
+
+
+
+```{r}
+portsWeekly <- 
+  largePorts %>%
+  select(Port = PORT_NAME, HARBORTYPE, CHAN_DEPTH, CARGODEPTH, OIL_DEPTH, LATITUDE,LONGITUDE) %>% 
+  merge(Ports %>%
+            group_by(Port) %>%
+            mutate(chlor_a = scale(chlor_a)) %>%
+            ungroup() %>%
+            group_by(Port, week, COVID) %>%
+            summarise(chlor_a = mean(chlor_a, na.rm = T)) %>%
+                      #sd_chlor_a = sd(chlor_a, na.rm = T),
+                      #red = mean(red, na.rm = T),
+                      #sd_red = sd(red, na.rm = T)) %>%
+            spread(COVID, chlor_a) %>%
+            ungroup() %>%
+            mutate(dif = COVID - notCOVID) %>%
+              filter(!is.na(dif))) %>%
+            st_transform(crs = 54030) 
+ 
+
+ggplot(portsWeekly, aes(x = week, y = dif, group = Port)) + geom_point() + geom_line() 
+
+
+world <- rnaturalearth::ne_coastline(scale = "medium", returnclass = "sf") %>% 
+  st_transform(crs = 54030) %>% 
+  st_simplify(dTolerance = 200) %>% 
+  st_cast('POLYGON')
+
+p<- ggplot() + 
+  geom_sf(data = world, fill = 'grey80', color = 'grey80') + 
+  geom_sf(data = portsWeekly, aes(color = dif, geometry = geometry), size = 2) +
+  scale_color_gradient2(low = '#d8b365', mid = '#f5f5f5', high = '#5ab4ac', midpoint = 0, na.value='transparent',  trans = 'pseudo_log') +
+  coord_sf(ylim = c(-6000000,7000000)) + ggthemes::theme_map() +
+  theme(legend.position = 'top')+
+  ggtitle("{frame}") +
+  transition_manual(week) +
+  ease_aes("linear") +
+  enter_fade() +
+  exit_fade()
+  
+animate(p, fps = 3)
+
+?unique(portsWeekly$week)
+```
+
+```{r}
+counts <- portsWeekly %>%
+  group_by(Port) %>% 
+  summarise(count = n()) %>%
+  filter(count > 10)
+
+latlongRows <- largePorts %>%
+  st_set_geometry(NULL) %>%
+  select(Port = PORT_NAME, LATITUDE,LONGITUDE) %>%
+  filter(Port %in% counts$Port) %>%
+  arrange(desc(LATITUDE)) %>%
+  mutate(latRow = row_number()) %>%
+  arrange(LONGITUDE) %>%
+  mutate(longRow = row_number()) 
+
+check <- portsWeekly %>% right_join(latlongRows)
+
+ggplot(check,aes(x = longRow, y = latRow, fill = dif)) + geom_raster() + facet_wrap(~week)
+
+ggplot(check, aes(x = week, y = latRow, fill = dif)) + geom_tile() +
+  scale_fill_gradient2(low = '#d8b365', mid = 'grey90', high = '#5ab4ac', midpoint = 0,
+                        na.value='transparent',  trans = 'pseudo_log')
+
+```
+
+
+## Check port by port
+
+```{r}
+## Filter out ports without many COVID samples
+counts <- Ports %>%
+  filter(COVID == "COVID") %>%
+  group_by(Port) %>%
+  summarise(count = n()) %>% filter(count > 15)
+
+wilcox <- Ports %>%
+  filter(Port %in% counts$Port,
+         day < 137) %>%
+  group_by(Port) %>%
+  nest() %>%
+  mutate(wilcox = purrr::map(data, ~wilcox.test(.$chlor_a[.$COVID == '2010-2019'], .$chlor_a[.$COVID == 'COVID'], conf.int = T)),
+         p.value = purrr::map_dbl(wilcox, 'p.value'),
+         conf = purrr::map(wilcox, 'conf.int'),
+         conf.low = purrr::map_dbl(conf, 1),
+         conf.high = purrr::map_dbl(conf, 2)) %>%
+  select(-c(data, wilcox, conf)) %>%
+  mutate(diff = mean(conf.low, conf.high),
+         diff.binary = ifelse(diff > 0, 'Low chlor_a COVID', 'High chlor_a COVID'),
+         #diff.binary = ifelse(p.value > 0.05, 'No Difference', diff.binary),
+         sig = ifelse(p.value < 0.1, T,F))
+  
+
+world <- rnaturalearth::ne_coastline(returnclass = 'sf')
+
+wilcox.sf <- wilcox %>% left_join(largePorts %>% select(-geometry), by = c('Port' = 'PORT_NAME')) %>% st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+
+ggplot(world) + geom_sf() +
+  geom_sf(data = wilcox.sf, aes(color = diff.binary))
+
+mapView(wilcox.sf, zcol = 'diff.binary')
+
+ggplot(world) + geom_sf() +
+  geom_sf(data = wilcox.sf %>% filter(sig == T), aes(color = diff.binary))
+
+
+```
+
+## Take a look a shipping concentration samples
+
+```{r}
+files <- list.files('data/MODIS_RegionalShipSamples', full.names = T)
+files
+samples <- read_csv(files[1]) %>% mutate(region = 'Asia') %>%
+  bind_rows(read_csv(files[2]) %>% mutate(region = 'EU')) %>%
+  bind_rows(read_csv(files[3]) %>% mutate(region = 'MidEast')) %>%
+  bind_rows(read_csv(files[4]) %>% mutate(region = 'NAEast')) %>%
+  bind_rows(read_csv(files[5]) %>% mutate(region = 'NAWest')) %>%
+  mutate(classes = factor(classes)) %>%
+  rowwise() %>%
+  mutate(geometry = str_split(.geo, ':')[[1]][4] %>% gsub('\\[|\\]|\\}','', .) %>% str_split(., ',')) %>%
+  ungroup() %>%
+  mutate(long = map_chr(geometry, 1),
+         lat = map_chr(geometry, 2),
+         long = as.numeric(long),
+         lat = as.numeric(lat)) %>%
+  select(-c(.geo, geometry, `system:index`))
+  
+samples.sf <- samples %>% st_as_sf(coords = c('long','lat'), crs = 4326)
+
+samples.sf %>%
+  filter(region == 'Asia') %>%
+  mapView(., zcol = 'classes')
+
+## Shipping data from
+##https://knb.ecoinformatics.org/view/doi:10.5063/F19Z92TW
+
+## Chlor_a 
+ggplot(samples, aes(x = classes, y = chlor_a_median)) + geom_boxplot() + 
+  coord_cartesian(y = c(-1,1)) +
+  labs(x = 'Shipping Density Classes (2013)', y = 'Chlorophyll Change During COVID (mg/cu. m) \n(2020 Median - 2010-2019 Median)') +
+  facet_wrap(~region)
+
+## Whats up with class 8 in NAWest?
+samples.sf %>%
+  filter(classes == '8',
+         region == 'NAWest') %>%
+  mapView(zcol = 'chlor_a_median')
+
+ggplot(samples, aes(x = classes, y = poc_median)) + geom_boxplot() + 
+  coord_cartesian(y = c(-100,100)) +
+  facet_wrap(~region)
+
+
+## 
+
+```
+
