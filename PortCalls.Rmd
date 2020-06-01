@@ -1,0 +1,104 @@
+---
+title: "PortCalls"
+author: "John Gardner"
+date: "June 1, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(foreign)
+library(tidyverse)
+library(feather)
+library(viridis)
+library(sf)
+library(rgdal)
+library(maps)
+library(magrittr)
+library(mlbench)
+library(caret)
+library(onehot)
+library(purrr)
+library(data.table)
+library(tmap)
+library(mltools)
+library(ggthemes)
+library(dplyr)
+library(ggplot2)
+library(mapview)
+library(readr)
+library(lubridate)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+
+#knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## R Markdown
+
+
+```{r load}
+
+# load port call data. Note most recent week is not accurate
+# https://comtrade.un.org/data/monitor#Comtrade
+
+port <- read_csv("D:/Dropbox/projects/COVIDPortR/in/portcalls_global.csv")
+
+# sum port calls by week of entry and subregion
+port_sub_sum <- port %>%
+  rename(week_entry = `Week of Date-Entry`, region=`Region Name`, subregion = `Sub-region Name`, port_calls = `Port Calls` )  %>%
+  mutate_(date_week_entry = ~parse_date_time(week_entry, orders="dby") ) %>%
+  group_by(subregion, date_week_entry) %>%
+  summarise(sum_calls = sum(port_calls, na.rm=T),
+            region=region[1]) 
+  
+# sum port calss by week of entry and region
+port_region_sum <- port %>%
+  rename(week_entry = `Week of Date-Entry`, region=`Region Name`, subregion = `Sub-region Name`, port_calls = `Port Calls` )  %>%
+  mutate_(date_week_entry = ~parse_date_time(week_entry, orders="dby") ) %>%
+  group_by(region, date_week_entry) %>%
+  summarise(sum_calls = sum(port_calls, na.rm=T)) 
+  
+
+port_map <- port %>%
+    rename(week_entry = `Week of Date-Entry`, region=`Region Name`, subregion = `Sub-region Name`, port_calls = `Port Calls` )  %>%
+  distinct(`Port-Name`, .keep_all = T) %>%
+  st_as_sf(coords=c("Lon", "Lat"), crs=4326)
+
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r plots}
+
+
+ggplot(port_sub_sum) +
+  geom_line(aes(x=date_week_entry, y=sum_calls))+
+  facet_wrap(~subregion, scales="free_y") +
+  theme_bw()
+
+
+ggplot(port_region_sum) +
+  geom_line(aes(x=date_week_entry, y=sum_calls))+
+  facet_wrap(~region, scales="free_y") +
+  theme_bw()
+
+
+ggplot()+
+  geom_sf(data=world, fill="white", color="lightgrey") +
+  geom_sf(data = port_map, aes(color=region)) +
+  theme_bw() +
+  theme(panel.grid.major = element_line(colour = "transparent"))
+
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
