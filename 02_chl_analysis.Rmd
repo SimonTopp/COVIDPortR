@@ -243,10 +243,11 @@ ggplot(world) + geom_sf() +
 files <- list.files('data/MODIS_RegionalShipSamples', full.names = T)
 files
 samples <- read_csv(files[1]) %>% mutate(region = 'Asia') %>%
-  bind_rows(read_csv(files[2]) %>% mutate(region = 'EU')) %>%
-  bind_rows(read_csv(files[3]) %>% mutate(region = 'MidEast')) %>%
-  bind_rows(read_csv(files[4]) %>% mutate(region = 'NAEast')) %>%
-  bind_rows(read_csv(files[5]) %>% mutate(region = 'NAWest')) %>%
+  bind_rows(read_csv(files[2]) %>% mutate(region = 'Europe')) %>%
+  bind_rows(read_csv(files[3]) %>% mutate(region = 'Middle East/India')) %>%
+  bind_rows(read_csv(files[4]) %>% mutate(region = 'North America East')) %>%
+  bind_rows(read_csv(files[5]) %>% mutate(region = 'North America Northwest')) %>%
+  bind_rows(read_csv(files[6]) %>% mutate(region = 'North America Southwest')) %>%
   mutate(classes = factor(classes)) %>%
   rowwise() %>%
   mutate(geometry = str_split(.geo, ':')[[1]][4] %>% gsub('\\[|\\]|\\}','', .) %>% str_split(., ',')) %>%
@@ -257,6 +258,7 @@ samples <- read_csv(files[1]) %>% mutate(region = 'Asia') %>%
          lat = as.numeric(lat)) %>%
   select(-c(.geo, geometry, `system:index`))
   
+
 samples.sf <- samples %>% st_as_sf(coords = c('long','lat'), crs = 4326)
 
 samples.sf %>%
@@ -267,10 +269,30 @@ samples.sf %>%
 ##https://knb.ecoinformatics.org/view/doi:10.5063/F19Z92TW
 
 ## Chlor_a 
+
+samples %>%
+  group_by(classes) %>%
+  summarise(mean = mean(chlor_a_median),
+            sd = sd(chlor_a_median)) %>%
+  ggplot(., aes(x = classes, y = mean)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd))
+
+ggplot(samples, aes(x = classes, y = chlor_a_median)) + geom_boxplot() + 
+  coord_cartesian(y = c(-1,1)) +
+  labs(x = 'Shipping Density Classes (2013)', y = 'Chlorophyll Change During COVID (mg/cu. m) \n(2020 Median - 2010-2019 Median)')
+
 ggplot(samples, aes(x = classes, y = chlor_a_median)) + geom_boxplot() + 
   coord_cartesian(y = c(-1,1)) +
   labs(x = 'Shipping Density Classes (2013)', y = 'Chlorophyll Change During COVID (mg/cu. m) \n(2020 Median - 2010-2019 Median)') +
   facet_wrap(~region)
+
+
+ggplot(samples, aes(x = classes, y = chlor_a_median)) + geom_boxplot() + 
+  coord_cartesian(y = c(-1,1)) +
+  labs(x = 'Shipping Density Classes (2013)', y = 'Chlorophyll Change During COVID (mg/cu. m) \n(2020 Median - 2010-2019 Median)') +
+  facet_wrap(~region)
+
 
 ## Whats up with class 8 in NAWest?
 samples.sf %>%
@@ -282,8 +304,36 @@ ggplot(samples, aes(x = classes, y = poc_median)) + geom_boxplot() +
   coord_cartesian(y = c(-100,100)) +
   facet_wrap(~region)
 
+```
 
-## 
+## Take a look at the annual summary metrics
+
+```{r}
+files <- list.files('data/MODIS_ShipAnnualSummaries', full.names = T)
+yearly = files %>% map_dfr(read_csv)
+
+yearly %>% filter(region =='Europe') %>%
+  ggplot(.,aes(x = year, y = median)) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = median-sd, ymax = median+sd)) +
+  facet_wrap(~classes)
+
+yearly %>% filter(region =='Europe') %>%
+  ggplot(.,aes(x = year, y = mean)) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd)) +
+  facet_wrap(~classes)
+
+
+covidMean = yearly %>% filter(year == 2020)
+yearly %>% filter(year < 2020 & year > 2009) %>%
+  ggplot(aes(x = factor(classes), y = mean)) +
+  #geom_violin(draw_quantiles = c(.25,.5,.75)) +
+  geom_boxplot() +
+  geom_point(data = covidMean, shape = 17, color = 'red') +
+  facet_wrap(~region, scales = 'free')
+  
+  
 
 ```
 
